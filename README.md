@@ -25,6 +25,11 @@ pip install fmcmcp
 ### Option 2: Docker
 
 ```bash
+# Clone the repository
+git clone https://github.com/daxm/fmcmcp.git
+cd fmcmcp
+
+# Build the Docker image
 docker build -t fmcmcp .
 ```
 
@@ -66,7 +71,9 @@ Add this server configuration:
 
 ### If Installed via Docker
 
-Edit your Claude Desktop configuration file (same paths as above) and add:
+**First, ensure you've built the Docker image** (see Option 2 in Installation section above).
+
+Then edit your Claude Desktop configuration file (same paths as above) and add:
 
 ```json
 {
