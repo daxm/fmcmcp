@@ -8,7 +8,6 @@ import json
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict
-import subprocess
 import httpx
 import urllib3
 

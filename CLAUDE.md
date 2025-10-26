@@ -343,7 +343,6 @@ From `app/requirements.txt`:
 - `aiohttp` - Async HTTP client for FMC API calls
 - `httpx` - Async HTTP client for proxy communication
 - `urllib3` - SSL warning suppression
-- `packaging` - Version comparison for spec matching
 - `pipx` - Provides `uvx` for running mcp-openapi-proxy
 
 Install with:
@@ -510,6 +509,6 @@ fmcmcp/
 
 ## License
 
-This project is licensed under the MIT License. See the [LICENSE](../LICENSE) file for full details.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for full details.
 
 Copyright (c) 2025 Dax Mickelson
