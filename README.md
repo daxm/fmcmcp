@@ -167,12 +167,15 @@ docker build -t fmcmcp .
 ## Documentation
 
 - **[CLAUDE.md](CLAUDE.md)** - Comprehensive developer guide
-- **[FMC API Docs](https://developer.cisco.com/firepower/)** - Cisco's official API documentation
+- **[FMC API Reference Guides](https://www.cisco.com/c/en/us/support/security/defense-center/products-programming-reference-guides-list.html)** - Official Cisco FMC API documentation
+- **[Cisco DevNet Firepower](https://developer.cisco.com/firepower/)** - Developer resources and examples
 - **[MCP Protocol](https://modelcontextprotocol.io/)** - Model Context Protocol specification
 
 ## License
 
-See LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2025 Dax Mickelson
 
 ## Support
 

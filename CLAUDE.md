@@ -359,9 +359,10 @@ pip install -r app/requirements.txt
 ## FMC API Reference
 
 Key resources:
-- **Online Docs:** https://developer.cisco.com/firepower/
-- **API Explorer:** `https://<fmc-host>/api/api-explorer`
-- **OpenAPI Spec:** `https://<fmc-host>/api/api-explorer/openapi.json`
+- **Official API Docs:** https://www.cisco.com/c/en/us/support/security/defense-center/products-programming-reference-guides-list.html
+- **Cisco DevNet:** https://developer.cisco.com/firepower/
+- **API Explorer:** `https://<fmc-host>/api/api-explorer` (on your FMC)
+- **OpenAPI Spec:** `https://<fmc-host>/api/api-explorer/openapi.json` (on your FMC)
 
 ### Authentication Details
 - **Token lifetime:** 30 minutes
@@ -475,6 +476,7 @@ fmcmcp/
 ├── Dockerfile               # Container definition
 ├── .env_example             # Credential template
 ├── .gitignore               # Git exclusions
+├── LICENSE                  # MIT License
 ├── CLAUDE.md                # This file
 └── README.md                # User documentation
 ```
@@ -510,4 +512,9 @@ fmcmcp/
 - Caching of common API responses
 - Observability (metrics, structured logging)
 - Support for FMC API v2+ features
-- to memorize
+
+## License
+
+This project is licensed under the MIT License. See the [LICENSE](../LICENSE) file for full details.
+
+Copyright (c) 2025 Dax Mickelson
