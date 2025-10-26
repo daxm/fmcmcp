@@ -12,8 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PATH="/root/.local/bin:${PATH}"
 RUN pipx ensurepath
 
-# Load environment variables from .env (if provided)
-COPY .env* ./
-RUN if [ -f .env ]; then set -a; . .env; set +a; fi
+# Health check - verify Python runtime is functional
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+  CMD python -c "import sys; sys.exit(0)" || exit 1
 
 CMD ["python", "fmc_mcp_server.py"]
