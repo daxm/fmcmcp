@@ -4,6 +4,7 @@ from mcp.types import Tool, TextContent
 import asyncio
 import aiohttp
 import os
+import sys
 import json
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -44,7 +45,12 @@ class FMCConnection:
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
-        await self.authenticate()
+        try:
+            await self.authenticate()
+        except Exception:
+            # If authentication fails, close the session before re-raising
+            await self.session.close()
+            raise
         return self
 
     async def __aexit__(
@@ -493,6 +499,40 @@ async def main():
                 )
 
             await proxy.stop()
+
+    except aiohttp.client_exceptions.ClientConnectorError as e:
+        print(f"\n✗ ERROR: Cannot connect to FMC at {host}", file=sys.stderr)
+        print(f"  Connection details: {str(e)}", file=sys.stderr)
+        print(f"\n  Troubleshooting steps:", file=sys.stderr)
+        print(f"  - Verify FMC_HOST is correct (current: {host})", file=sys.stderr)
+        print(f"  - Ensure FMC is running and accessible", file=sys.stderr)
+        print(f"  - Check network connectivity from this container/host to FMC", file=sys.stderr)
+        print(f"  - Verify firewall rules allow HTTPS (443) traffic\n", file=sys.stderr)
+        sys.exit(1)
+
+    except aiohttp.client_exceptions.ClientResponseError as e:
+        if e.status == 401:
+            print(f"\n✗ ERROR: Authentication failed for FMC at {host}", file=sys.stderr)
+            print(f"  Status: {e.status} {e.message}", file=sys.stderr)
+            print(f"\n  Troubleshooting steps:", file=sys.stderr)
+            print(f"  - Verify FMC_USERNAME is correct (current: {username})", file=sys.stderr)
+            print(f"  - Verify FMC_PASSWORD is correct", file=sys.stderr)
+            print(f"  - Confirm user has API access permissions in FMC", file=sys.stderr)
+            print(f"  - Check if user account is locked or expired\n", file=sys.stderr)
+        else:
+            print(f"\n✗ ERROR: FMC returned error {e.status}: {e.message}", file=sys.stderr)
+            print(f"  URL: {e.request_info.url if e.request_info else 'unknown'}", file=sys.stderr)
+            print(f"\n  Check FMC logs for more details\n", file=sys.stderr)
+        sys.exit(1)
+
+    except Exception as e:
+        print(f"\n✗ ERROR: Unexpected error during startup", file=sys.stderr)
+        print(f"  Error type: {type(e).__name__}", file=sys.stderr)
+        print(f"  Details: {str(e)}", file=sys.stderr)
+        print(f"\n  If this persists, please report at:", file=sys.stderr)
+        print(f"  https://github.com/daxm/fmcmcp/issues\n", file=sys.stderr)
+        sys.exit(1)
+
     finally:
         # Cleanup temporary spec file
         if temp_spec_path.exists():
