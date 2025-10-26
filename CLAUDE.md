@@ -37,6 +37,7 @@ This is a **dynamic MCP (Model Context Protocol) server** that provides AI assis
 
 2. **FMCSpecManager** - `class FMCSpecManager`
    - Fetches OpenAPI spec from FMC at runtime
+   - `get_spec()` is a static method (no instance state required)
    - Always uses live spec from `/api-explorer/openapi.json`
    - Ensures spec matches the actual FMC version being accessed
 
@@ -465,7 +466,7 @@ python -c "import httpx; print(httpx.get('http://localhost:8000/health'))"
 ```
 fmcmcp/
 ├── app/
-│   ├── fmc_mcp_server.py    # Main server (~415 lines)
+│   ├── fmc_mcp_server.py    # Main server (~500 lines)
 │   └── requirements.txt     # Python dependencies
 ├── Dockerfile               # Container definition
 ├── .dockerignore            # Docker build exclusions

@@ -47,14 +47,26 @@ class FMCConnection:
         await self.authenticate()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(
+        self,
+        exc_type,
+        exc_val,
+        exc_tb,
+    ):
         if self.session:
             await self.session.close()
 
     async def authenticate(self):
         url = f"{self.base_url}/fmc_platform/v1/auth/generatetoken"
-        auth = aiohttp.BasicAuth(self.username, self.password)
-        async with self.session.post(url, auth=auth, ssl=self.verify_ssl) as response:
+        auth = aiohttp.BasicAuth(
+            self.username,
+            self.password,
+        )
+        async with self.session.post(
+            url,
+            auth=auth,
+            ssl=self.verify_ssl,
+        ) as response:
             if response.status != 204:
                 raise Exception(f"Authentication failed: {response.status}")
             self.auth_token = response.headers.get("X-auth-access-token")
@@ -83,7 +95,9 @@ class FMCConnection:
             "X-auth-refresh-token": self.refresh_token,
         }
         async with self.session.post(
-            url, headers=headers, ssl=self.verify_ssl
+            url,
+            headers=headers,
+            ssl=self.verify_ssl,
         ) as response:
             if response.status != 204:
                 await self.authenticate()
@@ -107,11 +121,18 @@ class FMCConnection:
             "Content-Type": "application/json",
         }
 
-    async def get(self, endpoint: str, params: Optional[Dict] = None) -> Dict:
+    async def get(
+        self,
+        endpoint: str,
+        params: Optional[Dict] = None,
+    ) -> Dict:
         await self.ensure_authenticated()
         url = f"{self.base_url}/fmc_config/v1/domain/{self.domain_uuid}/{endpoint}"
         async with self.session.get(
-            url, headers=self.get_headers(), params=params, ssl=self.verify_ssl
+            url,
+            headers=self.get_headers(),
+            params=params,
+            ssl=self.verify_ssl,
         ) as response:
             if response.status != 200:
                 error_text = await response.text()
@@ -120,11 +141,18 @@ class FMCConnection:
                 )
             return await response.json()
 
-    async def post(self, endpoint: str, data: Dict) -> Dict:
+    async def post(
+        self,
+        endpoint: str,
+        data: Dict,
+    ) -> Dict:
         await self.ensure_authenticated()
         url = f"{self.base_url}/fmc_config/v1/domain/{self.domain_uuid}/{endpoint}"
         async with self.session.post(
-            url, headers=self.get_headers(), json=data, ssl=self.verify_ssl
+            url,
+            headers=self.get_headers(),
+            json=data,
+            ssl=self.verify_ssl,
         ) as response:
             if response.status not in [200, 201, 202]:
                 error_text = await response.text()
@@ -140,12 +168,15 @@ class FMCConnection:
 class FMCSpecManager:
     """Fetches OpenAPI spec from FMC at runtime."""
 
-    async def get_spec(self, fmc: FMCConnection) -> Dict:
+    @staticmethod
+    async def get_spec(fmc: FMCConnection) -> Dict:
         """Fetch the OpenAPI spec from the FMC."""
         url = f"{fmc.base_url}/api-explorer/openapi.json"
         await fmc.ensure_authenticated()
         async with fmc.session.get(
-            url, headers=fmc.get_headers(), ssl=fmc.verify_ssl
+            url,
+            headers=fmc.get_headers(),
+            ssl=fmc.verify_ssl,
         ) as response:
             if response.status != 200:
                 raise Exception(f"Failed to fetch spec: {response.status}")
@@ -157,7 +188,11 @@ class FMCSpecManager:
 # ============================================
 class FMCProxy:
     def __init__(
-        self, spec_path: Path, fmc_url: str, auth_token: str, port: int = 8000
+        self,
+        spec_path: Path,
+        fmc_url: str,
+        auth_token: str,
+        port: int = 8000,
     ):
         self.spec_path = spec_path
         self.fmc_url = fmc_url
@@ -199,7 +234,9 @@ class FMCProxy:
                     resp = await client.post(f"http://localhost:{self.port}/tools/list")
                     resp.raise_for_status()
                     tools = [Tool(**t) for t in resp.json()]
-                    print(f"✓ Proxy ready after {(attempt + 1) * retry_delay:.1f}s, loaded {len(tools)} tools")
+                    print(
+                        f"✓ Proxy ready after {(attempt + 1) * retry_delay:.1f}s, loaded {len(tools)} tools"
+                    )
                     return tools
             except Exception as e:
                 last_error = e
@@ -213,8 +250,11 @@ class FMCProxy:
                 stderr_bytes = await asyncio.wait_for(
                     self.process.stderr.read(1000), timeout=1.0
                 )
-                stderr_output = stderr_bytes.decode("utf-8", errors="ignore")
-            except:
+                stderr_output = stderr_bytes.decode(
+                    "utf-8",
+                    errors="ignore",
+                )
+            except Exception:
                 pass
 
         error_msg = f"Proxy failed to start after {max_retries * retry_delay}s. Last error: {last_error}"
@@ -223,7 +263,11 @@ class FMCProxy:
         print(f"✗ {error_msg}")
         return []
 
-    async def call_tool(self, name: str, arguments: dict) -> str:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict,
+    ) -> str:
         """Call a proxy tool via HTTP."""
         async with httpx.AsyncClient(timeout=30.0) as client:
             try:
@@ -234,7 +278,10 @@ class FMCProxy:
                 resp.raise_for_status()
                 result = resp.json()
                 if isinstance(result, list) and len(result) > 0:
-                    return result[0].get("text", str(result))
+                    return result[0].get(
+                        "text",
+                        str(result),
+                    )
                 return str(result)
             except httpx.TimeoutException:
                 return f"✗ Tool '{name}' timed out after 30s"
@@ -259,7 +306,12 @@ class ToolRegistry:
         self.handlers: Dict[str, callable] = {}
         self.proxy: Optional[FMCProxy] = None
 
-    def tool(self, name: str, description: str, input_schema: dict):
+    def tool(
+        self,
+        name: str,
+        description: str,
+        input_schema: dict,
+    ):
         def decorator(func):
             self.tools[name] = {
                 "name": name,
@@ -271,7 +323,10 @@ class ToolRegistry:
 
         return decorator
 
-    def add_proxy_tools(self, proxy_tools: list[Tool]):
+    def add_proxy_tools(
+        self,
+        proxy_tools: list[Tool],
+    ):
         """Add dynamic tools from proxy."""
         for tool in proxy_tools:
             self.tools[tool.name] = {
@@ -283,11 +338,18 @@ class ToolRegistry:
     def get_tools(self) -> list[Tool]:
         return [Tool(**tool_def) for tool_def in self.tools.values()]
 
-    async def call_tool(self, name: str, arguments: dict) -> str:
+    async def call_tool(
+        self,
+        name: str,
+        arguments: dict,
+    ) -> str:
         if name in self.handlers:
             return await self.handlers[name](arguments)
         if self.proxy:
-            return await self.proxy.call_tool(name, arguments)
+            return await self.proxy.call_tool(
+                name,
+                arguments,
+            )
         raise ValueError(f"Unknown tool: {name}")
 
 
@@ -330,7 +392,13 @@ async def test_fmc_connection(arguments: dict) -> str:
         host, username, password, domain, verify_ssl = extract_fmc_credentials(
             arguments
         )
-        async with FMCConnection(host, username, password, domain, verify_ssl) as fmc:
+        async with FMCConnection(
+            host,
+            username,
+            password,
+            domain,
+            verify_ssl,
+        ) as fmc:
             result = await fmc.get("../info/serverversion")
             items = result.get("items", [])
             if items:
@@ -355,7 +423,10 @@ def extract_fmc_credentials(arguments: dict) -> tuple:
     username = arguments.get("fmc_username") or os.getenv("FMC_USERNAME", "admin")
     password = arguments.get("fmc_password") or os.getenv("FMC_PASSWORD", "Admin123")
     domain = arguments.get("fmc_domain") or os.getenv("FMC_DOMAIN", "Global")
-    verify_ssl = arguments.get("verify_ssl", False)
+    verify_ssl = (
+        arguments.get("verify_ssl")
+        or os.getenv("FMC_VERIFY_SSL", "false").lower() == "true"
+    )
     return host, username, password, domain, verify_ssl
 
 
@@ -368,8 +439,14 @@ async def list_tools() -> list[Tool]:
 
 
 @app.call_tool()
-async def call_tool(name: str, arguments: dict) -> list[TextContent]:
-    result = await registry.call_tool(name, arguments)
+async def call_tool(
+    name: str,
+    arguments: dict,
+) -> list[TextContent]:
+    result = await registry.call_tool(
+        name,
+        arguments,
+    )
     return [TextContent(type="text", text=result)]
 
 
@@ -384,23 +461,35 @@ async def main():
     domain = os.getenv("FMC_DOMAIN", "Global")
     verify_ssl = os.getenv("FMC_VERIFY_SSL", "False").lower() == "true"
 
-    temp_spec_path = Path("temp_spec.json")
+    temp_spec_path = Path("temp_spec.json").absolute()
 
     try:
-        async with FMCConnection(host, username, password, domain, verify_ssl) as fmc:
+        async with FMCConnection(
+            host,
+            username,
+            password,
+            domain,
+            verify_ssl,
+        ) as fmc:
             spec_manager = FMCSpecManager()
             spec = await spec_manager.get_spec(fmc)
             with open(temp_spec_path, "w") as f:
                 json.dump(spec, f)
 
-            proxy = FMCProxy(temp_spec_path, fmc.base_url, fmc.auth_token)
+            proxy = FMCProxy(
+                temp_spec_path,
+                fmc.base_url,
+                fmc.auth_token,
+            )
             registry.proxy = proxy
             proxy_tools = await proxy.start()
             registry.add_proxy_tools(proxy_tools)
 
             async with stdio_server() as (read_stream, write_stream):
                 await app.run(
-                    read_stream, write_stream, app.create_initialization_options()
+                    read_stream,
+                    write_stream,
+                    app.create_initialization_options(),
                 )
 
             await proxy.stop()
