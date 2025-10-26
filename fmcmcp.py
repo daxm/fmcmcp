@@ -1,4 +1,5 @@
 """MCP server for Cisco Firepower Management Center API access."""
+
 import asyncio
 import json
 import os
@@ -61,7 +62,7 @@ class FMCConnection:
         try:
             await self.authenticate()
         except Exception:
-            # Ensure session is closed if authentication fails
+            # Ensure the session is closed if authentication fails
             await self.session.close()
             raise
         return self
@@ -120,9 +121,7 @@ class FMCConnection:
 
                 if not self.domain_uuid:
                     available_domains = [
-                        d[: d.find("(")].strip()
-                        for d in domains.split(";")
-                        if "(" in d
+                        d[: d.find("(")].strip() for d in domains.split(";") if "(" in d
                     ]
                     raise FMCError(
                         f"Domain '{self.domain_name}' not found.\n"
@@ -135,6 +134,12 @@ class FMCConnection:
                 )
                 self.refresh_count = 0
 
+        except aiohttp.ClientSSLError as e:
+            raise FMCError(
+                f"SSL/TLS error connecting to FMC at {self.host}.\n"
+                f"  Error: {e}\n"
+                f"  Note: Self-signed certificates should work with FMC_VERIFY_SSL=false"
+            )
         except aiohttp.ClientConnectorError as e:
             raise FMCError(
                 f"Cannot connect to FMC at {self.host}.\n"
@@ -148,12 +153,6 @@ class FMCConnection:
                 f"Connection to FMC at {self.host} timed out after 30 seconds.\n"
                 f"  Check: Network connectivity\n"
                 f"  Verify: FMC is responding"
-            )
-        except aiohttp.ClientSSLError as e:
-            raise FMCError(
-                f"SSL/TLS error connecting to FMC at {self.host}.\n"
-                f"  Error: {e}\n"
-                f"  Note: Self-signed certificates should work with FMC_VERIFY_SSL=false"
             )
 
     async def refresh_auth_token(self):
@@ -265,9 +264,16 @@ class ProxyManager:
                     resp = await client.post("http://localhost:8000/tools/list")
                     resp.raise_for_status()
                     self.tools = [Tool(**t) for t in resp.json()]
-                    print(f"✓ Loaded {len(self.tools)} tools from FMC", file=sys.stderr)
+                    print(
+                        f"✓ Loaded {len(self.tools)} tools from FMC",
+                        file=sys.stderr,
+                    )
                     return
-            except (httpx.HTTPError, httpx.ConnectError, OSError):
+            except (
+                httpx.HTTPError,
+                httpx.ConnectError,
+                OSError,
+            ):
                 await asyncio.sleep(0.5)
 
         raise TimeoutError("Proxy failed to start after 30 attempts")
@@ -283,7 +289,10 @@ class ProxyManager:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 "http://localhost:8000/call_tool",
-                json={"name": name, "arguments": arguments},
+                json={
+                    "name": name,
+                    "arguments": arguments,
+                },
             )
             result = resp.json()
             if isinstance(result, list) and result:
@@ -324,7 +333,12 @@ async def call_tool(
 ) -> list[TextContent]:
     """Execute a tool via the proxy."""
     if not proxy:
-        return [TextContent(type="text", text="Error: Proxy not initialized")]
+        return [
+            TextContent(
+                type="text",
+                text="Error: Proxy not initialized",
+            )
+        ]
 
     result = await proxy.call_tool(name, arguments)
     return [
@@ -345,20 +359,53 @@ async def async_main():
     global proxy
 
     # Get credentials from the environment or use defaults
-    host = os.getenv("FMC_HOST", "192.168.45.45")
-    username = os.getenv("FMC_USERNAME", "admin")
-    password = os.getenv("FMC_PASSWORD", "Admin123")
-    domain = os.getenv("FMC_DOMAIN", "Global")
-    verify_ssl = os.getenv("FMC_VERIFY_SSL", "false").lower() == "true"
+    host = os.getenv(
+        "FMC_HOST",
+        "192.168.45.45",
+    )
+    username = os.getenv(
+        "FMC_USERNAME",
+        "admin",
+    )
+    password = os.getenv(
+        "FMC_PASSWORD",
+        "Admin123",
+    )
+    domain = os.getenv(
+        "FMC_DOMAIN",
+        "Global",
+    )
+    verify_ssl = (
+        os.getenv(
+            "FMC_VERIFY_SSL",
+            "false",
+        ).lower()
+        == "true"
+    )
 
     spec_file = Path(tempfile.gettempdir()) / "fmc_openapi.json"
 
     # Show connection attempt details
-    print(f"→ Connecting to FMC (timeout: 30s)...", file=sys.stderr)
-    print(f"  Host: {host}", file=sys.stderr)
-    print(f"  Username: {username}", file=sys.stderr)
-    print(f"  Domain: {domain}", file=sys.stderr)
-    print(f"  SSL Verify: {verify_ssl}", file=sys.stderr)
+    print(
+        f"→ Connecting to FMC (timeout: 30s)...",
+        file=sys.stderr,
+    )
+    print(
+        f"  Host: {host}",
+        file=sys.stderr,
+    )
+    print(
+        f"  Username: {username}",
+        file=sys.stderr,
+    )
+    print(
+        f"  Domain: {domain}",
+        file=sys.stderr,
+    )
+    print(
+        f"  SSL Verify: {verify_ssl}",
+        file=sys.stderr,
+    )
 
     try:
         # Connect to FMC and fetch spec
@@ -369,12 +416,21 @@ async def async_main():
             domain,
             verify_ssl,
         ) as fmc:
-            print(f"✓ Connected to FMC at {host}", file=sys.stderr)
+            print(
+                f"✓ Connected to FMC at {host}",
+                file=sys.stderr,
+            )
 
-            print(f"→ Fetching OpenAPI spec (timeout: 60s)...", file=sys.stderr)
+            print(
+                f"→ Fetching OpenAPI spec (timeout: 60s)...",
+                file=sys.stderr,
+            )
             spec = await fmc.get_spec()
             spec_file.write_text(json.dumps(spec))
-            print("✓ Fetched OpenAPI spec", file=sys.stderr)
+            print(
+                "✓ Fetched OpenAPI spec",
+                file=sys.stderr,
+            )
 
             # Start proxy
             proxy = ProxyManager(
@@ -394,24 +450,57 @@ async def async_main():
 
     except FMCError as e:
         print(f"\n{'='*60}", file=sys.stderr)
-        print(f"✗ FMC Connection Failed", file=sys.stderr)
-        print(f"{'='*60}", file=sys.stderr)
-        print(f"{e}", file=sys.stderr)
-        print(f"{'='*60}\n", file=sys.stderr)
+        print(
+            f"✗ FMC Connection Failed",
+            file=sys.stderr,
+        )
+        print(
+            f"{'='*60}",
+            file=sys.stderr,
+        )
+        print(
+            f"{e}",
+            file=sys.stderr,
+        )
+        print(
+            f"{'='*60}\n",
+            file=sys.stderr,
+        )
         sys.exit(1)
     except TimeoutError as e:
-        print(f"\n✗ Timeout: {e}", file=sys.stderr)
+        print(
+            f"\n✗ Timeout: {e}",
+            file=sys.stderr,
+        )
         sys.exit(1)
-    except (aiohttp.ClientError, ConnectionError) as e:
-        print(f"\n✗ Network Error: {e}", file=sys.stderr)
-        print(f"  Check: FMC connectivity and credentials", file=sys.stderr)
+    except (
+        aiohttp.ClientError,
+        ConnectionError,
+    ) as e:
+        print(
+            f"\n✗ Network Error: {e}",
+            file=sys.stderr,
+        )
+        print(
+            f"  Check: FMC connectivity and credentials",
+            file=sys.stderr,
+        )
         sys.exit(1)
     except KeyboardInterrupt:
-        print("\n✓ Shutting down gracefully", file=sys.stderr)
+        print(
+            "\n✓ Shutting down gracefully",
+            file=sys.stderr,
+        )
         sys.exit(0)
     except Exception as e:
-        print(f"\n✗ Unexpected Error: {e.__class__.__name__}: {e}", file=sys.stderr)
-        print(f"  Please report this issue at: https://github.com/daxm/fmcmcp/issues", file=sys.stderr)
+        print(
+            f"\n✗ Unexpected Error: {e.__class__.__name__}: {e}",
+            file=sys.stderr,
+        )
+        print(
+            f"  Please report this issue at: https://github.com/daxm/fmcmcp/issues",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     finally:
