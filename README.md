@@ -14,15 +14,31 @@ Connects Claude (or any MCP client) to your FMC and automatically creates tools 
 
 **No manual coding required** - tools are generated from your FMC's OpenAPI specification at runtime.
 
-## Quick Start
+## Installation
 
-### 1. Build the Docker Image
+### Option 1: PyPI (Recommended)
+
+```bash
+pip install fmcmcp
+```
+
+### Option 2: Docker
 
 ```bash
 docker build -t fmcmcp .
 ```
 
-### 2. Configure Claude Desktop
+### Option 3: From Source
+
+```bash
+git clone https://github.com/daxm/fmcmcp.git
+cd fmcmcp
+pip install -e .
+```
+
+## Quick Start
+
+### If Installed via PyPI or Source
 
 Edit your Claude Desktop configuration file:
 
@@ -30,6 +46,27 @@ Edit your Claude Desktop configuration file:
 **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
 
 Add this server configuration:
+
+```json
+{
+  "mcpServers": {
+    "fmc-server": {
+      "command": "fmc-mcp-server",
+      "env": {
+        "FMC_HOST": "your-fmc.example.com",
+        "FMC_USERNAME": "admin",
+        "FMC_PASSWORD": "YourPassword",
+        "FMC_DOMAIN": "Global",
+        "FMC_VERIFY_SSL": "false"
+      }
+    }
+  }
+}
+```
+
+### If Installed via Docker
+
+Edit your Claude Desktop configuration file (same paths as above) and add:
 
 ```json
 {
@@ -51,11 +88,11 @@ Add this server configuration:
 
 Replace the `env` values with your FMC credentials.
 
-### 3. Restart Claude Desktop
+### Restart Claude Desktop
 
 **Important:** Quit Claude Desktop completely (from system tray/menu bar), then relaunch.
 
-### 4. Test in Claude
+### Test in Claude
 
 Try these prompts:
 ```
@@ -150,17 +187,26 @@ The server acts as a proxy, translating Claude's natural language requests into 
 
 ## Development
 
-### Local Testing
+### Local Development Setup
 ```bash
-# Install dependencies
-pip install -r app/requirements.txt
+# Clone repository
+git clone https://github.com/daxm/fmcmcp.git
+cd fmcmcp
+
+# Install in editable mode
+pip install -e .
 
 # Run locally (requires FMC access)
-python app/fmc_mcp_server.py
+fmc-mcp-server
 ```
 
-### Rebuild After Changes
+### Building for Distribution
 ```bash
+# Using Poetry
+poetry build
+poetry publish  # Publish to PyPI
+
+# Using Docker
 docker build -t fmcmcp .
 ```
 

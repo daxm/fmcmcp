@@ -5,3 +5,7 @@
 temp_spec.json
 *.pyc
 __pycache__/
+dist/
+build/
+*.egg-info/
+.pytest_cache/

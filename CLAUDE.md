@@ -199,8 +199,11 @@ docker run --rm -i \
 
 **Test locally:**
 ```bash
-# In project directory
-python app/fmc_mcp_server.py
+# Run the installed package
+fmc-mcp-server
+
+# OR run as module
+python -m fmcmcp
 ```
 
 ## OpenAPI Specification Management
@@ -410,24 +413,30 @@ Key resources:
 ### Setup
 ```bash
 # Clone repository
-git clone <repo-url>
+git clone https://github.com/daxm/fmcmcp.git
 cd fmcmcp
 
-# Create virtual environment (for local dev)
-python -m venv .venv
-source .venv/bin/activate  # Linux/WSL
-# .venv\Scripts\activate    # Windows
+# Install in editable mode (Poetry)
+poetry install
 
-# Install dependencies
-pip install -r app/requirements.txt
+# OR install with pip
+pip install -e .
+
+# Run the server
+fmc-mcp-server
+# OR
+python -m fmcmcp
 ```
 
 ### Build and Test
 ```bash
+# Build Python package with Poetry
+poetry build
+
 # Build Docker image
 docker build -t fmcmcp .
 
-# Test with env vars
+# Test Docker image
 docker run --rm -i \
   -e FMC_HOST=192.168.45.45 \
   -e FMC_USERNAME=admin \
@@ -451,23 +460,50 @@ python -c "import httpx; print(httpx.get('http://localhost:8000/health'))"
 
 ### Making Changes
 
-1. **Edit code** in `app/fmc_mcp_server.py`
-2. **Rebuild:** `docker build -t fmcmcp .`
-3. **Test:** Via Claude Desktop or manual Docker run
+1. **Edit code** in `fmcmcp/server.py`
+2. **Test locally:** `fmc-mcp-server` (editable install picks up changes)
+3. **Test Docker:** `docker build -t fmcmcp .` then run
 4. **Commit:** Git commit with descriptive message
 
 ### Adding Features
 
-**For custom tools:** Edit `fmc_mcp_server.py`, add `@registry.tool()` decorated function
+**For custom tools:** Edit `server.py`, add `@registry.tool()` decorated function
 
 **For core changes:** Update FMCConnection, FMCSpecManager, FMCProxy, or ToolRegistry classes
+
+### Publishing to PyPI
+
+```bash
+# Update version in fmcmcp/__version__.py
+# Format: X.YYYYMMDD.Y (e.g., 0.20250127.0)
+
+# Generate/update requirements.txt from Poetry
+poetry export -f requirements.txt --output requirements.txt --without-hashes
+
+# Build distribution packages
+poetry build
+
+# Test on Test PyPI (optional)
+poetry publish -r testpypi
+
+# Publish to PyPI
+poetry publish
+
+# Create git tag
+git tag v0.20250127.0
+git push origin v0.20250127.0
+```
 
 ## Project Structure
 ```
 fmcmcp/
-├── app/
-│   ├── fmc_mcp_server.py    # Main server (~500 lines)
-│   └── requirements.txt     # Python dependencies
+├── fmcmcp/                  # Python package directory
+│   ├── __init__.py          # Package initialization
+│   ├── __main__.py          # Entry point for python -m fmcmcp
+│   ├── __version__.py       # Version: 0.20250126.0
+│   └── server.py            # Main server code (~503 lines)
+├── pyproject.toml           # Poetry configuration & package metadata
+├── requirements.txt         # Pip requirements (for Docker/non-Poetry users)
 ├── Dockerfile               # Container definition
 ├── .dockerignore            # Docker build exclusions
 ├── .gitignore               # Git exclusions

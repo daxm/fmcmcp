@@ -2,8 +2,9 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Copy application code
-COPY app/ .
+# Copy package files
+COPY fmcmcp/ ./fmcmcp/
+COPY pyproject.toml README.md LICENSE requirements.txt ./
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
@@ -16,4 +17,4 @@ RUN pipx ensurepath
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD python -c "import sys; sys.exit(0)" || exit 1
 
-CMD ["python", "fmc_mcp_server.py"]
+CMD ["python", "-m", "fmcmcp"]
