@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11.11-slim
 
 WORKDIR /app
 
@@ -13,8 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PATH="/root/.local/bin:${PATH}"
 RUN pipx ensurepath
 
-# Health check - verify Python runtime is functional
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-  CMD python -c "import sys; sys.exit(0)" || exit 1
+# Health check - verify Python runtime and required packages are available
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+  CMD python -c "import sys, mcp, aiohttp, httpx; sys.exit(0)" || exit 1
 
 CMD ["python", "-m", "fmcmcp"]

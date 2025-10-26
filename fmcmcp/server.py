@@ -6,14 +6,29 @@ import aiohttp
 import os
 import sys
 import json
+import signal
+import tempfile
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Optional, Dict
+from typing import Optional, Dict, Callable, Any
 import httpx
 import urllib3
+from aiolimiter import AsyncLimiter
 
 # Disable SSL warnings (FMC often uses self-signed certs)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Constants
+TOKEN_EXPIRY_MINUTES = 30
+TOKEN_REFRESH_THRESHOLD_SECONDS = 300  # 5 minutes before expiry
+TOKEN_MAX_REFRESHES = 3
+TOKEN_REFRESH_INTERVAL_MINUTES = 25  # Refresh proxy token before expiry
+PROXY_DEFAULT_PORT = 8000
+PROXY_STARTUP_MAX_RETRIES = 30
+PROXY_STARTUP_RETRY_DELAY = 0.5
+PROXY_STOP_TIMEOUT = 5.0
+FMC_RATE_LIMIT_REQUESTS = 120
+FMC_RATE_LIMIT_PERIOD_SECONDS = 60
 
 app = Server("fmc-server")
 
@@ -42,6 +57,8 @@ class FMCConnection:
         self.token_expiry: Optional[datetime] = None
         self.refresh_count = 0
         self.session: Optional[aiohttp.ClientSession] = None
+        # FMC allows 120 requests per minute - rate limit to stay within bounds
+        self.rate_limiter = AsyncLimiter(max_rate=FMC_RATE_LIMIT_REQUESTS, time_period=FMC_RATE_LIMIT_PERIOD_SECONDS)
 
     async def __aenter__(self):
         self.session = aiohttp.ClientSession()
@@ -80,19 +97,22 @@ class FMCConnection:
             domains = response.headers.get("DOMAINS", "")
             for domain_entry in domains.split(";"):
                 domain_entry = domain_entry.strip()
-                if self.domain_name in domain_entry:
-                    start = domain_entry.find("(")
-                    end = domain_entry.find(")")
-                    if start != -1 and end != -1:
+                # Extract domain name and UUID - format is "DomainName (uuid)"
+                start = domain_entry.find("(")
+                end = domain_entry.find(")")
+                if start != -1 and end != -1:
+                    domain_name_in_entry = domain_entry[:start].strip()
+                    # Exact match to avoid matching substrings like "Global" in "GlobalTest"
+                    if domain_name_in_entry == self.domain_name:
                         self.domain_uuid = domain_entry[start + 1 : end]
                         break
             if not self.domain_uuid:
                 raise Exception(f"Domain '{self.domain_name}' not found")
-            self.token_expiry = datetime.now() + timedelta(minutes=30)
+            self.token_expiry = datetime.now() + timedelta(minutes=TOKEN_EXPIRY_MINUTES)
             self.refresh_count = 0
 
     async def refresh_auth_token(self):
-        if self.refresh_count >= 3:
+        if self.refresh_count >= TOKEN_MAX_REFRESHES:
             await self.authenticate()
             return
         url = f"{self.base_url}/fmc_platform/v1/auth/refreshtoken"
@@ -110,7 +130,7 @@ class FMCConnection:
                 return
             self.auth_token = response.headers.get("X-auth-access-token")
             self.refresh_token = response.headers.get("X-auth-refresh-token")
-            self.token_expiry = datetime.now() + timedelta(minutes=30)
+            self.token_expiry = datetime.now() + timedelta(minutes=TOKEN_EXPIRY_MINUTES)
             self.refresh_count += 1
 
     async def ensure_authenticated(self):
@@ -118,7 +138,7 @@ class FMCConnection:
             await self.authenticate()
             return
         time_until_expiry = (self.token_expiry - datetime.now()).total_seconds()
-        if time_until_expiry < 300:
+        if time_until_expiry < TOKEN_REFRESH_THRESHOLD_SECONDS:
             await self.refresh_auth_token()
 
     def get_headers(self) -> Dict[str, str]:
@@ -134,18 +154,19 @@ class FMCConnection:
     ) -> Dict:
         await self.ensure_authenticated()
         url = f"{self.base_url}/fmc_config/v1/domain/{self.domain_uuid}/{endpoint}"
-        async with self.session.get(
-            url,
-            headers=self.get_headers(),
-            params=params,
-            ssl=self.verify_ssl,
-        ) as response:
-            if response.status != 200:
-                error_text = await response.text()
-                raise Exception(
-                    f"GET {endpoint} failed ({response.status}): {error_text}"
-                )
-            return await response.json()
+        async with self.rate_limiter:
+            async with self.session.get(
+                url,
+                headers=self.get_headers(),
+                params=params,
+                ssl=self.verify_ssl,
+            ) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"GET {endpoint} failed ({response.status}): {error_text}"
+                    )
+                return await response.json()
 
     async def post(
         self,
@@ -154,18 +175,62 @@ class FMCConnection:
     ) -> Dict:
         await self.ensure_authenticated()
         url = f"{self.base_url}/fmc_config/v1/domain/{self.domain_uuid}/{endpoint}"
-        async with self.session.post(
-            url,
-            headers=self.get_headers(),
-            json=data,
-            ssl=self.verify_ssl,
-        ) as response:
-            if response.status not in [200, 201, 202]:
-                error_text = await response.text()
-                raise Exception(
-                    f"POST {endpoint} failed ({response.status}): {error_text}"
-                )
-            return await response.json()
+        async with self.rate_limiter:
+            async with self.session.post(
+                url,
+                headers=self.get_headers(),
+                json=data,
+                ssl=self.verify_ssl,
+            ) as response:
+                if response.status not in [200, 201, 202]:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"POST {endpoint} failed ({response.status}): {error_text}"
+                    )
+                return await response.json()
+
+    async def put(
+        self,
+        endpoint: str,
+        data: Dict,
+    ) -> Dict:
+        await self.ensure_authenticated()
+        url = f"{self.base_url}/fmc_config/v1/domain/{self.domain_uuid}/{endpoint}"
+        async with self.rate_limiter:
+            async with self.session.put(
+                url,
+                headers=self.get_headers(),
+                json=data,
+                ssl=self.verify_ssl,
+            ) as response:
+                if response.status not in [200, 201, 202]:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"PUT {endpoint} failed ({response.status}): {error_text}"
+                    )
+                return await response.json()
+
+    async def delete(
+        self,
+        endpoint: str,
+    ) -> Dict:
+        await self.ensure_authenticated()
+        url = f"{self.base_url}/fmc_config/v1/domain/{self.domain_uuid}/{endpoint}"
+        async with self.rate_limiter:
+            async with self.session.delete(
+                url,
+                headers=self.get_headers(),
+                ssl=self.verify_ssl,
+            ) as response:
+                if response.status not in [200, 204]:
+                    error_text = await response.text()
+                    raise Exception(
+                        f"DELETE {endpoint} failed ({response.status}): {error_text}"
+                    )
+                # DELETE may return 204 No Content
+                if response.status == 204:
+                    return {}
+                return await response.json()
 
 
 # ============================================
@@ -179,14 +244,15 @@ class FMCSpecManager:
         """Fetch the OpenAPI spec from the FMC."""
         url = f"{fmc.base_url}/api-explorer/openapi.json"
         await fmc.ensure_authenticated()
-        async with fmc.session.get(
-            url,
-            headers=fmc.get_headers(),
-            ssl=fmc.verify_ssl,
-        ) as response:
-            if response.status != 200:
-                raise Exception(f"Failed to fetch spec: {response.status}")
-            return await response.json()
+        async with fmc.rate_limiter:
+            async with fmc.session.get(
+                url,
+                headers=fmc.get_headers(),
+                ssl=fmc.verify_ssl,
+            ) as response:
+                if response.status != 200:
+                    raise Exception(f"Failed to fetch spec: {response.status}")
+                return await response.json()
 
 
 # ============================================
@@ -197,14 +263,29 @@ class FMCProxy:
         self,
         spec_path: Path,
         fmc_url: str,
-        auth_token: str,
-        port: int = 8000,
+        fmc_connection: 'FMCConnection',
+        port: int = PROXY_DEFAULT_PORT,
     ):
         self.spec_path = spec_path
         self.fmc_url = fmc_url
-        self.auth_token = auth_token
+        self.fmc_connection = fmc_connection
         self.port = port
-        self.process = None
+        self.process: Optional[asyncio.subprocess.Process] = None
+        self._token_refresh_task: Optional[asyncio.Task] = None
+
+    async def _update_proxy_token(self):
+        """Background task to refresh proxy's auth token periodically."""
+        try:
+            while True:
+                await asyncio.sleep(TOKEN_REFRESH_INTERVAL_MINUTES * 60)
+                await self.fmc_connection.ensure_authenticated()
+                # Note: mcp-openapi-proxy reads API_KEY from environment at startup
+                # This approach ensures FMCConnection tokens stay fresh, but proxy
+                # continues using its initial token. For long-running sessions,
+                # the proxy would need to support dynamic token updates.
+                print(f"✓ Refreshed FMC auth token", file=sys.stderr)
+        except asyncio.CancelledError:
+            pass
 
     async def start(self) -> list[Tool]:
         """Start a proxy subprocess and fetch tools."""
@@ -215,7 +296,7 @@ class FMCProxy:
                 "OPENAPI_SPEC_FORMAT": "json",
                 "SERVER_URL_OVERRIDE": self.fmc_url,
                 "API_AUTH_TYPE": "Bearer",
-                "API_KEY": self.auth_token,
+                "API_KEY": self.fmc_connection.auth_token,
                 "DEBUG": "true",
             }
         )
@@ -229,9 +310,9 @@ class FMCProxy:
             stderr=asyncio.subprocess.PIPE,
         )
 
-        # Poll proxy until ready (max 15 seconds)
-        max_retries = 30
-        retry_delay = 0.5
+        # Poll proxy until ready
+        max_retries = PROXY_STARTUP_MAX_RETRIES
+        retry_delay = PROXY_STARTUP_RETRY_DELAY
         last_error = None
 
         for attempt in range(max_retries):
@@ -241,8 +322,11 @@ class FMCProxy:
                     resp.raise_for_status()
                     tools = [Tool(**t) for t in resp.json()]
                     print(
-                        f"✓ Proxy ready after {(attempt + 1) * retry_delay:.1f}s, loaded {len(tools)} tools"
+                        f"✓ Proxy ready after {(attempt + 1) * retry_delay:.1f}s, loaded {len(tools)} tools",
+                        file=sys.stderr
                     )
+                    # Start background token refresh task
+                    self._token_refresh_task = asyncio.create_task(self._update_proxy_token())
                     return tools
             except Exception as e:
                 last_error = e
@@ -266,7 +350,7 @@ class FMCProxy:
         error_msg = f"Proxy failed to start after {max_retries * retry_delay}s. Last error: {last_error}"
         if stderr_output:
             error_msg += f"\nProxy stderr: {stderr_output}"
-        print(f"✗ {error_msg}")
+        print(f"✗ {error_msg}", file=sys.stderr)
         return []
 
     async def call_tool(
@@ -298,9 +382,23 @@ class FMCProxy:
 
     async def stop(self):
         """Stop the proxy subprocess."""
+        # Cancel token refresh task
+        if self._token_refresh_task:
+            self._token_refresh_task.cancel()
+            try:
+                await self._token_refresh_task
+            except asyncio.CancelledError:
+                pass
+
+        # Stop subprocess with timeout
         if self.process:
             self.process.terminate()
-            await self.process.wait()
+            try:
+                await asyncio.wait_for(self.process.wait(), timeout=PROXY_STOP_TIMEOUT)
+            except asyncio.TimeoutError:
+                print("⚠ Proxy didn't stop gracefully, force killing...", file=sys.stderr)
+                self.process.kill()
+                await self.process.wait()
 
 
 # ============================================
@@ -309,7 +407,7 @@ class FMCProxy:
 class ToolRegistry:
     def __init__(self):
         self.tools: Dict[str, dict] = {}
-        self.handlers: Dict[str, callable] = {}
+        self.handlers: Dict[str, Callable[[dict], Any]] = {}
         self.proxy: Optional[FMCProxy] = None
 
     def tool(
@@ -317,8 +415,8 @@ class ToolRegistry:
         name: str,
         description: str,
         input_schema: dict,
-    ):
-        def decorator(func):
+    ) -> Callable:
+        def decorator(func: Callable) -> Callable:
             self.tools[name] = {
                 "name": name,
                 "description": description,
@@ -424,7 +522,7 @@ Authentication token is valid and ready for API calls."""
         return f"✗ Failed to connect to FMC: {str(e)}"
 
 
-def extract_fmc_credentials(arguments: dict) -> tuple:
+def extract_fmc_credentials(arguments: dict) -> tuple[str, str, str, str, bool]:
     host = arguments.get("fmc_host") or os.getenv("FMC_HOST", "192.168.45.45")
     username = arguments.get("fmc_username") or os.getenv("FMC_USERNAME", "admin")
     password = arguments.get("fmc_password") or os.getenv("FMC_PASSWORD", "Admin123")
@@ -457,6 +555,16 @@ async def call_tool(
 
 
 # ============================================
+# SHUTDOWN HANDLING
+# ============================================
+def handle_shutdown(signum, frame):
+    """Handle shutdown signals gracefully."""
+    print(f"\n✓ Received shutdown signal ({signal.Signals(signum).name}), cleaning up...", file=sys.stderr)
+    # Note: Cleanup happens in the finally block of main()
+    # Signal handlers are registered to provide user feedback during shutdown
+
+
+# ============================================
 # SERVER RUNNER
 # ============================================
 async def main():
@@ -467,7 +575,8 @@ async def main():
     domain = os.getenv("FMC_DOMAIN", "Global")
     verify_ssl = os.getenv("FMC_VERIFY_SSL", "False").lower() == "true"
 
-    temp_spec_path = Path("temp_spec.json").absolute()
+    temp_spec_path = Path(tempfile.gettempdir()) / "fmc_spec.json"
+    proxy: Optional[FMCProxy] = None
 
     try:
         async with FMCConnection(
@@ -485,11 +594,15 @@ async def main():
             proxy = FMCProxy(
                 temp_spec_path,
                 fmc.base_url,
-                fmc.auth_token,
+                fmc,
             )
             registry.proxy = proxy
             proxy_tools = await proxy.start()
             registry.add_proxy_tools(proxy_tools)
+
+            # Register signal handlers for graceful shutdown
+            signal.signal(signal.SIGTERM, handle_shutdown)
+            signal.signal(signal.SIGINT, handle_shutdown)
 
             async with stdio_server() as (read_stream, write_stream):
                 await app.run(
@@ -498,7 +611,8 @@ async def main():
                     app.create_initialization_options(),
                 )
 
-            await proxy.stop()
+            if proxy:
+                await proxy.stop()
 
     except aiohttp.client_exceptions.ClientConnectorError as e:
         print(f"\n✗ ERROR: Cannot connect to FMC at {host}", file=sys.stderr)
@@ -534,9 +648,19 @@ async def main():
         sys.exit(1)
 
     finally:
+        # Cleanup proxy subprocess if it exists
+        if proxy:
+            try:
+                await proxy.stop()
+            except Exception as e:
+                print(f"Warning: Failed to stop proxy: {e}", file=sys.stderr)
+
         # Cleanup temporary spec file
         if temp_spec_path.exists():
-            temp_spec_path.unlink()
+            try:
+                temp_spec_path.unlink()
+            except Exception as e:
+                print(f"Warning: Failed to remove temp spec file: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":

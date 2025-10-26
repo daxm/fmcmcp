@@ -26,7 +26,7 @@ This is a **dynamic MCP (Model Context Protocol) server** that provides AI assis
 - `mcp-openapi-proxy` generates 665+ tools automatically from spec
 - Single `test_fmc_connection` custom tool for validation
 
-### Core Components (in order of appearance in fmc_mcp_server.py)
+### Core Components (in order of appearance in server.py)
 
 1. **FMCConnection** - `class FMCConnection`
    - Async context manager for FMC API access

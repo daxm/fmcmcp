@@ -152,6 +152,59 @@ docker run --rm -i \
 
 The server acts as a proxy, translating Claude's natural language requests into FMC API calls.
 
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Claude Desktop                          │
+│                   (or other MCP Client)                         │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+                             │ MCP Protocol (stdio)
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                      FMC MCP Server                             │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │                    Tool Registry                        │    │
+│  │  • test_fmc_connection (custom)                        │    │
+│  │  • 665+ auto-generated tools from OpenAPI spec         │    │
+│  └────────────────────────────────────────────────────────┘    │
+│                             │                                    │
+│                             ├─────────────────┐                 │
+│                             │                 │                 │
+│  ┌──────────────────────────▼─┐   ┌──────────▼──────────────┐  │
+│  │    FMCConnection           │   │   mcp-openapi-proxy     │  │
+│  │  • Auth & token mgmt       │   │   (subprocess)          │  │
+│  │  • Rate limiting (120/min) │   │  • Parses OpenAPI spec  │  │
+│  │  • Domain resolution       │   │  • Generates tools      │  │
+│  └────────────────────────────┘   │  • Handles tool calls   │  │
+│                             │      └──────────┬──────────────┘  │
+│                             │                 │                 │
+└─────────────────────────────┼─────────────────┼─────────────────┘
+                              │                 │
+                              │ HTTPS           │ HTTP
+                              │ (API calls)     │ (localhost:8000)
+                              │                 │
+                    ┌─────────▼─────────────────▼──────────┐
+                    │                                       │
+                    │   Cisco Firepower Management Center  │
+                    │                                       │
+                    │  • REST API (/api/fmc_config/v1/...)│
+                    │  • OpenAPI spec (/api-explorer/...)  │
+                    │  • Authentication & authorization     │
+                    │                                       │
+                    └───────────────────────────────────────┘
+```
+
+**Flow:**
+1. Claude sends natural language request via MCP
+2. FMC MCP Server matches request to appropriate tool
+3. For auto-generated tools: Routes to mcp-openapi-proxy subprocess
+4. For custom tools: Executes directly using FMCConnection
+5. FMCConnection enforces rate limits and manages auth tokens
+6. API call sent to FMC with proper authentication
+7. Response flows back through chain to Claude
+
 ## Configuration Options
 
 | Variable | Default | Description |

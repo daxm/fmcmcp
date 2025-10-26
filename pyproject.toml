@@ -28,7 +28,7 @@ urllib3 = "^2.0.0"
 mcp-openapi-proxy = ">=0.1.0"
 httpx = "^0.28.0"
 pipx = "^1.4.0"
-poetry-core = "^2.2.1"
+aiolimiter = "^1.1.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"
