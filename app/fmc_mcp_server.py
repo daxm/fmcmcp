@@ -5,11 +5,9 @@ import asyncio
 import aiohttp
 import os
 import json
-import gzip
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import Optional, Dict
-from packaging import version
 import subprocess
 import httpx
 import urllib3
@@ -177,31 +175,10 @@ connection_pool = FMCConnectionPool()
 # SPEC MANAGER
 # ============================================
 class FMCSpecManager:
-    KNOWN_API_VERSIONS = ["7.4.0", "7.6.0", "7.7.0"]
+    """Fetches OpenAPI spec from FMC at runtime."""
 
-    def __init__(self, spec_dir: str = "specs"):
-        self.spec_dir = Path(spec_dir)
-        self.spec_dir.mkdir(exist_ok=True)
-
-    def _find_closest_version(self, target_version: str) -> Optional[str]:
-        """Find the closest spec version <= the target FMC version."""
-        try:
-            target = version.parse(target_version)
-            valid_versions = [
-                v for v in self.KNOWN_API_VERSIONS if version.parse(v) <= target
-            ]
-            return max(valid_versions, key=lambda x: version.parse(x), default=None)
-        except version.InvalidVersion:
-            return None
-
-    @staticmethod
-    def _load_spec(spec_path: Path) -> Dict:
-        """Load spec from compressed JSON."""
-        with gzip.open(spec_path, "rt", encoding="utf-8") as f:
-            return json.load(f)
-
-    async def _fetch_and_slim_spec(self, fmc: FMCConnection, version: str) -> Dict:
-        """Fetch full spec from FMC, slim it, and cache as .gz."""
+    async def get_spec(self, fmc: FMCConnection) -> Dict:
+        """Fetch the OpenAPI spec from the FMC."""
         url = f"{fmc.base_url}/api-explorer/openapi.json"
         await fmc.ensure_authenticated()
         async with fmc.session.get(
@@ -209,36 +186,7 @@ class FMCSpecManager:
         ) as response:
             if response.status != 200:
                 raise Exception(f"Failed to fetch spec: {response.status}")
-            full_spec = await response.json()
-
-        slim_spec = {
-            "openapi": full_spec["openapi"],
-            "info": full_spec.get("info", {}),
-            "servers": full_spec.get("servers", []),
-            "paths": full_spec["paths"],
-            "components": {
-                "securitySchemes": full_spec.get("components", {}).get(
-                    "securitySchemes", {}
-                )
-            },
-        }
-
-        gzip_path = self.spec_dir / f"fmc-{version}_slim.json.gz"
-        with gzip.open(gzip_path, "wt", encoding="utf-8") as f:
-            json.dump(slim_spec, f, indent=2)
-        return slim_spec
-
-    async def get_spec(self, fmc: FMCConnection) -> Dict:
-        """Get the appropriate spec for the FMC version."""
-        result = await fmc.get("../info/serverversion")
-        fmc_version = result.get("items", [{}])[0].get("serverVersion", "unknown")
-        spec_version = self._find_closest_version(fmc_version) or fmc_version
-
-        gzip_path = self.spec_dir / f"fmc-{spec_version}_slim.json.gz"
-        if gzip_path.exists():
-            return self._load_spec(gzip_path)
-
-        return await self._fetch_and_slim_spec(fmc, spec_version)
+            return await response.json()
 
 
 # ============================================
@@ -276,28 +224,61 @@ class FMCProxy:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        await asyncio.sleep(2)
-        async with httpx.AsyncClient() as client:
+
+        # Poll proxy until ready (max 15 seconds)
+        max_retries = 30
+        retry_delay = 0.5
+        last_error = None
+
+        for attempt in range(max_retries):
             try:
-                resp = await client.post(f"http://localhost:{self.port}/tools/list")
-                resp.raise_for_status()
-                return [Tool(**t) for t in resp.json()]
+                async with httpx.AsyncClient(timeout=2.0) as client:
+                    resp = await client.post(f"http://localhost:{self.port}/tools/list")
+                    resp.raise_for_status()
+                    tools = [Tool(**t) for t in resp.json()]
+                    print(f"✓ Proxy ready after {(attempt + 1) * retry_delay:.1f}s, loaded {len(tools)} tools")
+                    return tools
             except Exception as e:
-                print(f"Failed to fetch proxy tools: {e}")
-                return []
+                last_error = e
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(retry_delay)
+
+        # Failed to start
+        stderr_output = ""
+        if self.process and self.process.stderr:
+            try:
+                stderr_bytes = await asyncio.wait_for(
+                    self.process.stderr.read(1000), timeout=1.0
+                )
+                stderr_output = stderr_bytes.decode("utf-8", errors="ignore")
+            except:
+                pass
+
+        error_msg = f"Proxy failed to start after {max_retries * retry_delay}s. Last error: {last_error}"
+        if stderr_output:
+            error_msg += f"\nProxy stderr: {stderr_output}"
+        print(f"✗ {error_msg}")
+        return []
 
     async def call_tool(self, name: str, arguments: dict) -> str:
         """Call a proxy tool via HTTP."""
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             try:
                 resp = await client.post(
                     f"http://localhost:{self.port}/call_tool",
                     json={"name": name, "arguments": arguments},
                 )
                 resp.raise_for_status()
-                return resp.json()[0]["text"]
+                result = resp.json()
+                if isinstance(result, list) and len(result) > 0:
+                    return result[0].get("text", str(result))
+                return str(result)
+            except httpx.TimeoutException:
+                return f"✗ Tool '{name}' timed out after 30s"
+            except httpx.HTTPStatusError as e:
+                return f"✗ Tool '{name}' failed: HTTP {e.response.status_code}"
             except Exception as e:
-                return f"Error calling tool {name}: {str(e)}"
+                return f"✗ Error calling tool '{name}': {str(e)}"
 
     async def stop(self):
         """Stop the proxy subprocess."""
@@ -441,9 +422,9 @@ async def main():
     verify_ssl = os.getenv("FMC_VERIFY_SSL", "False").lower() == "true"
 
     async with FMCConnection(host, username, password, domain, verify_ssl) as fmc:
-        spec_manager = FMCSpecManager(spec_dir="specs")
+        spec_manager = FMCSpecManager()
         spec = await spec_manager.get_spec(fmc)
-        temp_spec_path = Path("specs/temp_spec.json")
+        temp_spec_path = Path("temp_spec.json")
         with open(temp_spec_path, "w") as f:
             json.dump(spec, f)
 

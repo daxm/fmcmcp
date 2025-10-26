@@ -1,6 +1,0 @@
-mcp
-aiohttp
-urllib3
-mcp-openapi-proxy
-httpx
-packaging

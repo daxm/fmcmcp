@@ -6,45 +6,67 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is an MCP (Model Context Protocol) server that provides AI assistants (like Claude) with tools to interact with Cisco Firepower Management Center (FMC) via its REST API.
+This is a **dynamic MCP (Model Context Protocol) server** that provides AI assistants (like Claude) with tools to interact with Cisco Firepower Management Center (FMC) via its REST API.
 
-**Purpose:** Enable conversational access to FMC operations without writing code manually.
+**Purpose:** Enable conversational access to FMC operations without writing code manually. Tools are automatically generated from FMC's OpenAPI specification.
+
+**Requirements:** FMC 6.4+ (first version with OpenAPI support)
 
 **Example Usage:**
 - "List all network objects on my FMC"
 - "Create a network object for 10.5.0.0/16"
 - "Show me device status"
+- "Get access policies"
 
 ## Architecture
 
-**Single-file design:** All code lives in `fmc_mcp_server.py` (~434 lines). This makes the server easy to deploy, understand, and modify.
+**Docker-based design with dynamic tool generation:**
+- Docker container packages all dependencies
+- Runtime fetches/loads FMC OpenAPI spec
+- `mcp-openapi-proxy` generates 665+ tools automatically from spec
+- Single `test_fmc_connection` custom tool for validation
 
-### Core Components (in order of appearance in file)
+### Core Components (in order of appearance in fmc_mcp_server.py)
 
-1. **FMCConnection** (lines 22-197)
+1. **FMCConnection** (lines 26-138)
    - Async context manager for FMC API access
    - Manages authentication and token lifecycle (30-minute expiry, max 3 refreshes)
    - Provides `.get()` and `.post()` methods that auto-refresh tokens
    - Handles domain UUID resolution from domain name
+   - Self-signed SSL cert support
 
-2. **FMCConnectionPool** (lines 204-248)
+2. **FMCConnectionPool** (lines 143-173)
    - Singleton pattern via global `connection_pool` instance
    - Caches connections by (host, user, domain, verify_ssl) tuple
    - Enables multi-FMC support in a single server instance
+   - Note: Currently defined but not used (future optimization)
 
-3. **ToolRegistry** (lines 288-327)
-   - Decorator pattern for registering MCP tools
-   - Maps tool names to handler functions
-   - Auto-generates MCP Tool objects from metadata
+3. **FMCSpecManager** (lines 177-189)
+   - Fetches OpenAPI spec from FMC at runtime
+   - Always uses live spec from `/api-explorer/openapi.json`
+   - Ensures spec matches the actual FMC version being accessed
 
-4. **Credential Extraction** (line 335-344)
-   - `extract_fmc_credentials()` implements the 3-tier fallback:
+4. **FMCProxy** (lines 247-340)
+   - Bridge to `mcp-openapi-proxy` subprocess
+   - Spawns `uvx mcp-openapi-proxy` with FMC connection details
+   - Health-check polling (15s timeout with 0.5s retries)
+   - Fetches 665+ auto-generated tools from proxy
+   - Proxies tool calls via HTTP to subprocess
+
+5. **ToolRegistry** (lines 342-368)
+   - Unified tool management (custom + dynamic)
+   - Decorator pattern for custom tools (`@registry.tool()`)
+   - Dynamic tool registration from proxy
+   - Unified `call_tool()` dispatch
+
+6. **Credential Extraction** (lines 409-415)
+   - `extract_fmc_credentials()` implements 3-tier fallback:
      1. Tool arguments (highest priority)
      2. Environment variables
      3. Cisco defaults (192.168.45.45/admin/Admin123)
 
-5. **MCP Server** (lines 405-434)
-   - Standard MCP stdio server using `@app.list_tools()` and `@app.call_tool()` hooks
+7. **MCP Server Hooks** (lines 421-461)
+   - Standard MCP stdio server using `@app.list_tools()` and `@app.call_tool()`
    - Client-agnostic (works with Claude Desktop, Claude Code, etc.)
 
 ### Authentication Flow
@@ -58,30 +80,72 @@ extract_fmc_credentials() pulls from:
     ↓
 FMCConnection authenticates and gets tokens
     ↓
+FMCSpecManager fetches/loads OpenAPI spec
+    ↓
+FMCProxy spawns mcp-openapi-proxy subprocess
+    ↓
+Proxy generates 665+ tools from OpenAPI spec
+    ↓
 Tools use connection to make API calls
+```
+
+### Dynamic Tool Generation Flow
+```
+Startup
+    ↓
+Connect to FMC → Authenticate
+    ↓
+Fetch OpenAPI spec from FMC (/api-explorer/openapi.json)
+    ↓
+Write spec to temp_spec.json
+    ↓
+Start mcp-openapi-proxy subprocess
+    ├─> OPENAPI_SPEC_URL=file://temp_spec.json
+    ├─> SERVER_URL_OVERRIDE=https://fmc.example.com/api
+    └─> API_KEY=<FMC auth token>
+    ↓
+Poll proxy /tools/list (health check)
+    ↓
+Register 665+ tools (one per FMC API endpoint)
+    ↓
+Start MCP stdio server
+    ↓
+Handle tool calls → Proxy → FMC API
 ```
 
 ## Credential Management
 
 **Hybrid approach** - supports three methods:
 
-### 1. Environment Variables (Secure Default)
-Set in `claude_desktop_config.json`:
+### 1. Environment Variables (Recommended for Docker)
+Set in Claude Desktop config or Docker environment:
+
+**Claude Desktop** (`claude_desktop_config.json`):
 ```json
 {
   "mcpServers": {
     "fmc-server": {
-      "command": "path/to/python.exe",
-      "args": ["path/to/fmc_mcp_server.py"],
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "fmcmcp"],
       "env": {
         "FMC_HOST": "fmc.example.com",
         "FMC_USERNAME": "apiuser",
         "FMC_PASSWORD": "SecurePassword",
-        "FMC_DOMAIN": "Global"
+        "FMC_DOMAIN": "Global",
+        "FMC_VERIFY_SSL": "false"
       }
     }
   }
 }
+```
+
+**Docker `.env` file:**
+```env
+FMC_HOST=fmc.example.com
+FMC_USERNAME=apiuser
+FMC_PASSWORD=SecurePassword
+FMC_DOMAIN=Global
+FMC_VERIFY_SSL=false
 ```
 
 ### 2. Chat Parameters (Flexible Override)
@@ -94,11 +158,82 @@ Falls back to Cisco's documented defaults for fresh FMC deployments:
 - Password: `Admin123`
 - Domain: `Global`
 
-## Adding New Tools
+## Docker Workflow
 
-### Pattern to Follow
+### Build Process
+```bash
+# 1. Copy app/ directory to container
+# 2. Install dependencies from app/requirements.txt
+# 3. Configure pipx/uvx in PATH
+# 4. Set up for stdio MCP server (ready to fetch specs at runtime)
+```
 
-All tools follow this structure:
+### Runtime Process
+```bash
+# 1. Load credentials from environment
+# 2. Connect to FMC and authenticate
+# 3. Fetch OpenAPI spec from FMC (/api-explorer/openapi.json)
+# 4. Write spec to temp file
+# 5. Start mcp-openapi-proxy subprocess with spec
+# 6. Proxy generates 665+ tools from spec
+# 7. Start MCP stdio server
+# 8. Handle tool calls from Claude → Proxy → FMC API
+```
+
+### Commands
+
+**Build:**
+```bash
+docker build -t fmcmcp .
+```
+
+**Run (with .env file):**
+```bash
+docker run --rm -i --env-file .env fmcmcp
+```
+
+**Run (with inline env vars):**
+```bash
+docker run --rm -i \
+  -e FMC_HOST=10.1.1.100 \
+  -e FMC_USERNAME=admin \
+  -e FMC_PASSWORD=Cisco123 \
+  fmcmcp
+```
+
+**Test locally:**
+```bash
+# In project directory
+python app/fmc_mcp_server.py
+```
+
+## OpenAPI Specification Management
+
+The server **always fetches the OpenAPI spec from the target FMC at runtime**. This ensures:
+- ✅ Spec matches the actual FMC version
+- ✅ No version mismatches or stale specs
+- ✅ No maintenance burden for spec updates
+- ✅ Simpler codebase
+
+**How it works:**
+1. Server connects to FMC
+2. Fetches spec from `https://<fmc-host>/api/api-explorer/openapi.json`
+3. Writes to temporary file (`temp_spec.json`)
+4. Passes to `mcp-openapi-proxy` for tool generation
+5. Proxy generates 665+ tools from the spec
+
+**Trade-off:** 1-2 second startup delay to fetch spec (acceptable for real-world use)
+
+## Tool Development
+
+### Custom Tools (Rare)
+
+Most tools are auto-generated from OpenAPI spec. Only add custom tools for:
+- Special authentication flows
+- Multi-step workflows
+- Custom data transformations
+
+**Pattern:**
 ```python
 @registry.tool(
     name="tool_name",
@@ -112,112 +247,29 @@ All tools follow this structure:
                 "description": "Description of custom parameter"
             }
         },
-        "required": [],  # Usually empty - credentials are optional
+        "required": [],
     },
 )
 async def tool_name(arguments: dict) -> str:
-    """Detailed docstring explaining what this tool does."""
+    """Detailed docstring."""
     try:
-        # Extract credentials
-        host, username, password, domain, verify_ssl = extract_fmc_credentials(
-            arguments
-        )
-        
-        # Extract custom parameters
-        custom_param = arguments.get("custom_param")
-        
-        # Create/get FMC connection
-        async with FMCConnection(
-            host, username, password, domain, verify_ssl
-        ) as fmc:
-            # Make API call
-            result = await fmc.get("object/networks")  # or .post()
-            
-            # Process and format response
-            items = result.get("items", [])
-            output = "Formatted results here..."
-            
-            return output
-    
+        host, username, password, domain, verify_ssl = extract_fmc_credentials(arguments)
+        async with FMCConnection(host, username, password, domain, verify_ssl) as fmc:
+            result = await fmc.get("endpoint")
+            return f"✓ Success: {result}"
     except Exception as e:
         return f"✗ Error: {str(e)}"
 ```
 
-### FMC API Endpoint Patterns
-
-From the API docs (`Firepower_Management_Center_REST_API_Quick_Start_Guide_620.pdf`):
-
-**Base URL:** `/api/fmc_config/v1/domain/{domain_UUID}/`
-
-**Common endpoints:**
-- Objects: `object/networks`, `object/hosts`, `object/networkgroups`
-- Devices: `devices/devicerecords`
-- Policies: `policy/accesspolicies`, `policy/accesspolicies/{policy_id}/accessrules`
-- Deployment: `deployment/deployabledevices`, `deployment/deploymentrequests`
-
-**Query parameters:**
-- `expanded=true` - Get full object details (not just references)
-- `offset=N` - Pagination starting position
-- `limit=N` - Number of results (default 25, max 1000)
-- Filtering: varies by object type (see API docs)
-
-### Example: List Network Objects
-```python
-@registry.tool(
-    name="list_network_objects",
-    description="List all network objects in FMC. Returns name, value, and type for each object.",
-    input_schema={
-        "type": "object",
-        "properties": {
-            **FMC_CREDENTIALS_SCHEMA,
-            "limit": {
-                "type": "integer",
-                "description": "Maximum number of objects to return (default: 25, max: 1000)",
-                "default": 25
-            }
-        },
-        "required": [],
-    },
-)
-async def list_network_objects(arguments: dict) -> str:
-    """List all network objects from FMC."""
-    try:
-        host, username, password, domain, verify_ssl = extract_fmc_credentials(
-            arguments
-        )
-        limit = arguments.get("limit", 25)
-        
-        async with FMCConnection(
-            host, username, password, domain, verify_ssl
-        ) as fmc:
-            result = await fmc.get(
-                "object/networks",
-                params={"limit": limit, "expanded": "true"}
-            )
-            
-            items = result.get("items", [])
-            if not items:
-                return "No network objects found."
-            
-            output = f"Found {len(items)} network objects:\n\n"
-            for item in items:
-                name = item.get("name", "Unknown")
-                value = item.get("value", "Unknown")
-                obj_type = item.get("type", "Unknown")
-                output += f"• {name}: {value} ({obj_type})\n"
-            
-            return output
-    
-    except Exception as e:
-        return f"✗ Failed to list network objects: {str(e)}"
-```
+### Tool Development Checklist
+- [ ] Includes `**FMC_CREDENTIALS_SCHEMA` in input_schema
+- [ ] Uses `extract_fmc_credentials(arguments)` for credential extraction
+- [ ] Uses `async with FMCConnection(...)` context manager
+- [ ] Wraps logic in try/except with user-friendly error messages
+- [ ] Returns formatted string output (not raw JSON)
+- [ ] Prefixes errors with `✗` and success with `✓`
 
 ## Code Standards
-
-### Formatting
-- **Black formatter** is required for all Python code
-- Line length: 88 characters (Black default)
-- Run `black fmc_mcp_server.py` before committing
 
 ### Style Guidelines
 - Use type hints for function parameters and returns
@@ -230,79 +282,86 @@ async def list_network_objects(arguments: dict) -> str:
 - Always use try/except in tool functions
 - Return user-friendly error messages (not raw stack traces)
 - Prefix error messages with `✗` and success with `✓`
+- Log to stderr for debugging (stdout is for MCP protocol)
 
 ## Testing
 
-### Manual Testing with Claude Desktop
+### Without FMC (Dry Run)
+Since most tools are auto-generated, manual testing is limited to:
+1. Docker build succeeds
+2. Server starts without errors
+3. Custom tools (like `test_fmc_connection`) work
 
-1. Ensure server is configured in `claude_desktop_config.json`
-2. Restart Claude Desktop (quit from system tray)
-3. In chat: "Test my FMC connection"
-4. Try new tools conversationally
+```bash
+# Test build
+docker build -t fmcmcp .
+
+# Test startup (will fail auth with defaults)
+docker run --rm -i fmcmcp &
+echo '{"method":"tools/list"}' | docker run --rm -i fmcmcp
+```
 
 ### With Real FMC
-Provide actual credentials when testing tools.
+1. Configure credentials in `.env` or Claude Desktop config
+2. Start server via Claude Desktop/Code
+3. In chat: "Test my FMC connection"
+4. Try auto-generated tools: "List all network objects"
 
-### Without FMC (Mock Testing)
-Currently not implemented - contributions welcome!
+### Manual Testing with Claude Desktop
 
-## Development Commands
+1. Build and configure:
+   ```bash
+   docker build -t fmcmcp .
+   # Edit ~/Library/Application Support/Claude/claude_desktop_config.json
+   ```
 
-### Setup
-```bash
-# Create virtual environment
-python -m venv .venv
+2. Add to config:
+   ```json
+   {
+     "mcpServers": {
+       "fmc-server": {
+         "command": "docker",
+         "args": ["run", "--rm", "-i", "fmcmcp"],
+         "env": {
+           "FMC_HOST": "your-fmc.example.com",
+           "FMC_USERNAME": "apiuser",
+           "FMC_PASSWORD": "password",
+           "FMC_DOMAIN": "Global"
+         }
+       }
+     }
+   }
+   ```
 
-# Activate virtual environment
-# On Linux/WSL:
-source .venv/bin/activate
-# On Windows:
-.venv\Scripts\activate
+3. Restart Claude Desktop (quit from system tray, not just close window)
 
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Code Formatting
-```bash
-# Format all Python files (required before commits)
-black fmc_mcp_server.py
-
-# Check formatting without making changes
-black --check fmc_mcp_server.py
-```
-
-### Running the Server
-```bash
-# The server runs via MCP client (Claude Desktop/Code)
-# For standalone testing:
-python fmc_mcp_server.py
-```
-
-### Testing Tools
-Since this is an MCP server, test tools through an MCP client (Claude Desktop or Claude Code):
-1. Configure server in client's config file
-2. Restart client completely
-3. Invoke tools conversationally: "Test my FMC connection"
+4. Test in chat:
+   - "Test my FMC connection"
+   - "List all available tools" (should show 665+)
+   - "Get network objects"
 
 ## Dependencies
 
-From `requirements.txt`:
+From `app/requirements.txt`:
 - `mcp` - Model Context Protocol SDK
+- `mcp-openapi-proxy` - Dynamic tool generation from OpenAPI specs
 - `aiohttp` - Async HTTP client for FMC API calls
+- `httpx` - Async HTTP client for proxy communication
 - `urllib3` - SSL warning suppression
+- `packaging` - Version comparison for spec matching
+- `pipx` - Provides `uvx` for running mcp-openapi-proxy
 
 Install with:
 ```bash
-pip install -r requirements.txt
+pip install -r app/requirements.txt
 ```
 
 ## FMC API Reference
 
 Key resources:
-- **API Guide:** `Firepower_Management_Center_REST_API_Quick_Start_Guide_620.pdf`
 - **Online Docs:** https://developer.cisco.com/firepower/
 - **API Explorer:** `https://<fmc-host>/api/api-explorer`
+- **OpenAPI Spec:** `https://<fmc-host>/api/api-explorer/openapi.json`
 
 ### Authentication Details
 - **Token lifetime:** 30 minutes
@@ -319,43 +378,136 @@ Key resources:
 
 ## Common Issues
 
+### "Proxy failed to start after 15s"
+- **Cause:** `uvx` not found or mcp-openapi-proxy installation failed
+- **Fix:** Check Dockerfile installed pipx correctly
+- **Debug:** `docker run --rm -it fmcmcp /bin/bash`, then `which uvx`
+
 ### "Authentication failed: 401"
-- Check credentials
-- Verify FMC is reachable
-- Confirm user has API permissions
+- Check credentials (case-sensitive)
+- Verify FMC is reachable from Docker container
+- Confirm user has API permissions in FMC
 
 ### "Domain 'X' not found"
 - Domain name is case-sensitive
-- Check available domains in FMC UI
-- Try "Global" (most common)
+- Check available domains in FMC UI (System > Configuration > REST API Preferences)
+- Try "Global" (most common default)
 
-### "Module 'mcp' not found"
-- Virtual environment not activated
-- Run: `pip install -r requirements.txt`
+### "No tools loaded" or "0 tools"
+- Proxy failed to parse OpenAPI spec
+- Check spec has valid JSON structure
+- Look at proxy stderr output in error message
 
 ### Claude Desktop doesn't see the server
-- Check `claude_desktop_config.json` syntax
-- Verify Python path points to venv Python
-- **Must quit from system tray** (not just close window)
+- Check `claude_desktop_config.json` syntax (must be valid JSON)
+- Use `docker` command, not direct Python
+- **Must quit Claude Desktop from system tray** (not just close window)
+- Check Docker is running: `docker ps`
 
-## Development Workflow for New Tools
+### "Connection refused" when calling tools
+- FMC not reachable from Docker container
+- Try `docker run --network host` for testing
+- Check firewall rules
 
-1. **Research the FMC API endpoint** using the API Explorer (`https://<fmc-host>/api/api-explorer`)
-2. **Add tool using `@registry.tool()` decorator** following the pattern in "Adding New Tools"
-3. **Run Black formatter**: `black fmc_mcp_server.py`
-4. **Test via MCP client:**
-   - Restart Claude Desktop/Code completely
-   - Invoke tool conversationally
-   - Verify output format and error handling
-5. **Update CLAUDE.md** only if introducing new architectural patterns
+## Development Workflow
 
-## Tool Development Checklist
+### Setup
+```bash
+# Clone repository
+git clone <repo-url>
+cd fmcmcp
 
-When implementing a new tool:
-- [ ] Includes `**FMC_CREDENTIALS_SCHEMA` in input_schema
-- [ ] Uses `extract_fmc_credentials(arguments)` for credential extraction
-- [ ] Uses `async with FMCConnection(...)` context manager
-- [ ] Wraps logic in try/except with user-friendly error messages
-- [ ] Returns formatted string output (not raw JSON)
-- [ ] Prefixes errors with `✗` and success with `✓`
-- [ ] Passes Black formatting check
+# Create virtual environment (for local dev)
+python -m venv .venv
+source .venv/bin/activate  # Linux/WSL
+# .venv\Scripts\activate    # Windows
+
+# Install dependencies
+pip install -r app/requirements.txt
+```
+
+### Build and Test
+```bash
+# Build Docker image
+docker build -t fmcmcp .
+
+# Test with env vars
+docker run --rm -i \
+  -e FMC_HOST=192.168.45.45 \
+  -e FMC_USERNAME=admin \
+  -e FMC_PASSWORD=Admin123 \
+  fmcmcp
+```
+
+### Debugging
+```bash
+# Run with DEBUG output
+docker run --rm -i --env-file .env fmcmcp 2>&1 | tee debug.log
+
+# Interactive shell in container
+docker run --rm -it fmcmcp /bin/bash
+
+# Check proxy is accessible
+docker run --rm -it fmcmcp /bin/bash
+# Inside container:
+python -c "import httpx; print(httpx.get('http://localhost:8000/health'))"
+```
+
+### Making Changes
+
+1. **Edit code** in `app/fmc_mcp_server.py`
+2. **Rebuild:** `docker build -t fmcmcp .`
+3. **Test:** Via Claude Desktop or manual Docker run
+4. **Commit:** Git commit with descriptive message
+
+### Adding Features
+
+**For custom tools:** Edit `fmc_mcp_server.py`, add `@registry.tool()` decorated function
+
+**For core changes:** Update FMCConnection, FMCSpecManager, FMCProxy, or ToolRegistry classes
+
+## Project Structure
+```
+fmcmcp/
+├── app/
+│   ├── fmc_mcp_server.py    # Main server (~430 lines)
+│   └── requirements.txt     # Python dependencies
+├── Dockerfile               # Container definition
+├── .env_example             # Credential template
+├── .gitignore               # Git exclusions
+├── CLAUDE.md                # This file
+└── README.md                # User documentation
+```
+
+## Architecture Decisions
+
+### Why Docker?
+- Self-contained dependencies (pipx, uvx, mcp-openapi-proxy)
+- Consistent runtime environment
+- Easy deployment to Claude Desktop/Code
+- Isolated from host Python environment
+
+### Why mcp-openapi-proxy?
+- Auto-generates 665+ tools from OpenAPI spec
+- No manual tool coding for each endpoint
+- Automatically updates when spec changes
+- Handles OpenAPI complexities ($ref, allOf, oneOf)
+
+### Why runtime spec fetching (no caching)?
+- Ensures spec always matches the target FMC version
+- No version mismatch issues
+- No maintenance burden for updating cached specs
+- Simpler codebase (no version matching, caching, compression logic)
+- 1-2 second startup delay is acceptable for real-world use
+- FMC spec has 9,372 `$ref` references - keeping it intact prevents breakage
+
+## Future Enhancements
+
+- Connection pooling (use existing FMCConnectionPool)
+- Health check endpoint for proxy
+- Unit tests with mocked FMC API
+- Multi-FMC support (parallel connections)
+- Caching of common API responses
+- Observability (metrics, structured logging)
+- Support for FMC API v2+ features
+- to memorize
