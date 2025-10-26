@@ -1,62 +1,36 @@
 # FMC MCP Server
 
-A Model Context Protocol (MCP) server that provides Claude with **665+ dynamically-generated tools** for interacting with Cisco Firepower Management Center (FMC) via its REST API.
+A simple MCP server that gives Claude access to your Cisco Firepower Management Center (FMC) API.
 
 ## What It Does
 
-Connects Claude (or any MCP client) to your FMC and automatically creates tools for every API endpoint:
-- List/create/update/delete network objects
-- Manage access policies and rules
-- Configure devices
-- Deploy configurations
-- Monitor system health
-- And 660+ more operations
+Connects to your FMC, fetches its OpenAPI specification, and dynamically creates 665+ tools for every API endpoint. No manual coding required.
 
-**No manual coding required** - tools are generated from your FMC's OpenAPI specification at runtime.
+**Example use cases:**
+- "List all network objects"
+- "Show me the access policies"
+- "Create a network object for 10.5.0.0/16"
+- "What's the device status?"
 
 ## Installation
 
-### Option 1: PyPI (Recommended)
-
 ```bash
-pip install fmcmcp
+# From GitHub
+pip install git+https://github.com/daxm/fmcmcp.git
+
+# Or with Poetry
+poetry add git+https://github.com/daxm/fmcmcp.git
 ```
 
-### Option 2: Docker
+## Configuration
 
-```bash
-# Clone the repository
-git clone https://github.com/daxm/fmcmcp.git
-cd fmcmcp
-
-# Build the Docker image
-docker build -t fmcmcp .
-```
-
-### Option 3: From Source
-
-```bash
-git clone https://github.com/daxm/fmcmcp.git
-cd fmcmcp
-pip install -e .
-```
-
-## Quick Start
-
-### If Installed via PyPI or Source
-
-Edit your Claude Desktop configuration file:
-
-**macOS/Linux:** `~/Library/Application Support/Claude/claude_desktop_config.json`
-**Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
-
-Add this server configuration:
+Add to your MCP client config (e.g., `~/Library/Application Support/Claude/claude_desktop_config.json`):
 
 ```json
 {
   "mcpServers": {
-    "fmc-server": {
-      "command": "fmc-mcp-server",
+    "fmc": {
+      "command": "fmcmcp",
       "env": {
         "FMC_HOST": "your-fmc.example.com",
         "FMC_USERNAME": "admin",
@@ -69,228 +43,65 @@ Add this server configuration:
 }
 ```
 
-### If Installed via Docker
+**Defaults** (if not specified):
+- `FMC_HOST`: 192.168.45.45
+- `FMC_USERNAME`: admin
+- `FMC_PASSWORD`: Admin123
+- `FMC_DOMAIN`: Global
+- `FMC_VERIFY_SSL`: false
 
-**First, ensure you've built the Docker image** (see Option 2 in Installation section above).
-
-Then edit your Claude Desktop configuration file (same paths as above) and add:
-
-```json
-{
-  "mcpServers": {
-    "fmc-server": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i", "fmcmcp"],
-      "env": {
-        "FMC_HOST": "your-fmc.example.com",
-        "FMC_USERNAME": "admin",
-        "FMC_PASSWORD": "YourPassword",
-        "FMC_DOMAIN": "Global",
-        "FMC_VERIFY_SSL": "false"
-      }
-    }
-  }
-}
-```
-
-Replace the `env` values with your FMC credentials.
-
-### Restart Claude Desktop
-
-**Important:** Quit Claude Desktop completely (from system tray/menu bar), then relaunch.
-
-### Test in Claude
-
-Try these prompts:
-```
-"Test my FMC connection"
-"List all available tools"
-"Show me all network objects"
-"What access policies are configured?"
-```
-
-## Credential Configuration
-
-### Option 1: Claude Desktop Config (Recommended)
-
-Set credentials directly in `claude_desktop_config.json` as shown above.
-
-### Option 2: Environment File
-
-Create `.env` file:
-```env
-FMC_HOST=192.168.1.10
-FMC_USERNAME=admin
-FMC_PASSWORD=MySecurePassword
-FMC_DOMAIN=Global
-FMC_VERIFY_SSL=false
-```
-
-Then run:
-```bash
-docker run --rm -i --env-file .env fmcmcp
-```
-
-### Option 3: Inline Environment Variables
-
-```bash
-docker run --rm -i \
-  -e FMC_HOST=192.168.1.10 \
-  -e FMC_USERNAME=admin \
-  -e FMC_PASSWORD=MyPassword \
-  -e FMC_DOMAIN=Global \
-  fmcmcp
-```
+Restart your MCP client after making changes.
 
 ## How It Works
 
-1. **Server starts** and connects to your FMC
-2. **Fetches OpenAPI spec** from FMC (`/api/api-explorer/openapi.json`)
-3. **Generates tools** dynamically using `mcp-openapi-proxy`
-4. **Registers 665+ tools** with Claude
-5. **Routes requests** from Claude → FMC API
+1. Connects to FMC with provided credentials
+2. Fetches OpenAPI spec from FMC (`/api/api-explorer/openapi.json`)
+3. Starts `mcp-openapi-proxy` subprocess to generate tools
+4. Proxies tool calls to FMC API with automatic token refresh
 
-The server acts as a proxy, translating Claude's natural language requests into FMC API calls.
-
-### Architecture Diagram
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Claude Desktop                          │
-│                   (or other MCP Client)                         │
-└────────────────────────────┬────────────────────────────────────┘
-                             │
-                             │ MCP Protocol (stdio)
-                             │
-┌────────────────────────────▼────────────────────────────────────┐
-│                      FMC MCP Server                             │
-│  ┌────────────────────────────────────────────────────────┐    │
-│  │                    Tool Registry                        │    │
-│  │  • test_fmc_connection (custom)                        │    │
-│  │  • 665+ auto-generated tools from OpenAPI spec         │    │
-│  └────────────────────────────────────────────────────────┘    │
-│                             │                                    │
-│                             ├─────────────────┐                 │
-│                             │                 │                 │
-│  ┌──────────────────────────▼─┐   ┌──────────▼──────────────┐  │
-│  │    FMCConnection           │   │   mcp-openapi-proxy     │  │
-│  │  • Auth & token mgmt       │   │   (subprocess)          │  │
-│  │  • Rate limiting (120/min) │   │  • Parses OpenAPI spec  │  │
-│  │  • Domain resolution       │   │  • Generates tools      │  │
-│  └────────────────────────────┘   │  • Handles tool calls   │  │
-│                             │      └──────────┬──────────────┘  │
-│                             │                 │                 │
-└─────────────────────────────┼─────────────────┼─────────────────┘
-                              │                 │
-                              │ HTTPS           │ HTTP
-                              │ (API calls)     │ (localhost:8000)
-                              │                 │
-                    ┌─────────▼─────────────────▼──────────┐
-                    │                                       │
-                    │   Cisco Firepower Management Center  │
-                    │                                       │
-                    │  • REST API (/api/fmc_config/v1/...)│
-                    │  • OpenAPI spec (/api-explorer/...)  │
-                    │  • Authentication & authorization     │
-                    │                                       │
-                    └───────────────────────────────────────┘
-```
-
-**Flow:**
-1. Claude sends natural language request via MCP
-2. FMC MCP Server matches request to appropriate tool
-3. For auto-generated tools: Routes to mcp-openapi-proxy subprocess
-4. For custom tools: Executes directly using FMCConnection
-5. FMCConnection enforces rate limits and manages auth tokens
-6. API call sent to FMC with proper authentication
-7. Response flows back through chain to Claude
-
-## Configuration Options
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FMC_HOST` | `192.168.45.45` | FMC hostname or IP address |
-| `FMC_USERNAME` | `admin` | FMC username |
-| `FMC_PASSWORD` | `Admin123` | FMC password |
-| `FMC_DOMAIN` | `Global` | FMC domain name |
-| `FMC_VERIFY_SSL` | `false` | Verify SSL certificates (true/false) |
+**Token Management:**
+- Tokens last 30 minutes
+- Auto-refreshes up to 3 times (90 minutes total)
+- Re-authenticates automatically after max refreshes
 
 ## Requirements
 
-- Docker
-- FMC 6.4+ with OpenAPI support and API access enabled
-- Claude Desktop (or another MCP client)
-- Network access from Docker container to FMC
+- Python 3.11+
+- FMC 6.4+ (first version with OpenAPI support)
+- `uvx` command (install with: `pip install pipx && pipx ensurepath`)
+- Network access to your FMC
 
 ## Troubleshooting
 
-### "Authentication failed: 401"
+**Authentication fails:**
 - Check credentials (case-sensitive)
-- Verify user has API permissions in FMC
-- Confirm FMC is reachable from Docker container
+- Verify user has API access in FMC
+- Confirm FMC is reachable
 
-### User logged out of FMC GUI unexpectedly
-**Important:** FMC does not allow the same user to be logged into both the API and the web GUI simultaneously. If you're logged into the FMC web interface and then use this MCP server with the same username, one session will auto-logout the other.
+**Domain not found:**
+- Domain names are case-sensitive
+- Check available domains: FMC UI → System → Configuration → REST API Preferences
+- Default is `Global`
 
-**Recommendation:** Use a dedicated API user account for the MCP server to avoid disrupting GUI sessions.
+**Logged out of FMC GUI:**
+- FMC doesn't allow same user in both API and GUI simultaneously
+- Use a dedicated API user account for the MCP server
 
-### "No tools loaded" or "Proxy failed to start"
-- Check Docker logs: `docker run --rm -i --env-file .env fmcmcp 2>&1 | tee debug.log`
-- Verify `uvx` is installed in container
-- Ensure FMC OpenAPI endpoint is accessible
-
-### "Domain 'X' not found"
-- Domain name is case-sensitive
-- Check available domains in FMC UI: System > Configuration > REST API Preferences
-- Try `Global` (default domain)
-
-### Claude Desktop doesn't see the server
-- Verify `claude_desktop_config.json` is valid JSON
-- Check Docker is running: `docker ps`
-- Quit Claude Desktop from system tray (don't just close window)
-- Check logs: `~/Library/Logs/Claude/mcp*.log` (macOS)
+**Proxy fails to start:**
+- Ensure `uvx` is installed: `pip install pipx && pipx ensurepath`
+- Check FMC is accessible
 
 ## Development
 
-### Local Development Setup
 ```bash
-# Clone repository
 git clone https://github.com/daxm/fmcmcp.git
 cd fmcmcp
-
-# Install in editable mode
-pip install -e .
-
-# Run locally (requires FMC access)
-fmc-mcp-server
+poetry install
+poetry run fmcmcp
 ```
-
-### Building for Distribution
-```bash
-# Using Poetry
-poetry build
-poetry publish  # Publish to PyPI
-
-# Using Docker
-docker build -t fmcmcp .
-```
-
-## Documentation
-
-- **[CLAUDE.md](CLAUDE.md)** - Comprehensive developer guide
-- **[FMC API Reference Guides](https://www.cisco.com/c/en/us/support/security/defense-center/products-programming-reference-guides-list.html)** - Official Cisco FMC API documentation
-- **[Cisco DevNet Firepower](https://developer.cisco.com/firepower/)** - Developer resources and examples
-- **[MCP Protocol](https://modelcontextprotocol.io/)** - Model Context Protocol specification
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT License - see [LICENSE](LICENSE) file.
 
 Copyright (c) 2025 Dax Mickelson
-
-## Support
-
-For issues or questions:
-- Check [CLAUDE.md](CLAUDE.md) for detailed troubleshooting
-- Review FMC API documentation
-- Verify network connectivity and credentials
