@@ -1,7 +1,7 @@
-mcp
-aiohttp
-urllib3
-mcp-openapi-proxy
-httpx
-packaging
-pipx
+mcp>=1.0.0,<2.0.0
+aiohttp>=3.9.0,<4.0.0
+urllib3>=2.0.0,<3.0.0
+mcp-openapi-proxy>=0.1.0
+httpx>=0.27.0,<1.0.0
+packaging>=23.0,<25.0
+pipx>=1.4.0,<2.0.0
