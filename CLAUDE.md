@@ -28,46 +28,41 @@ This is a **dynamic MCP (Model Context Protocol) server** that provides AI assis
 
 ### Core Components (in order of appearance in fmc_mcp_server.py)
 
-1. **FMCConnection** (lines 26-138)
+1. **FMCConnection** - `class FMCConnection`
    - Async context manager for FMC API access
    - Manages authentication and token lifecycle (30-minute expiry, max 3 refreshes)
    - Provides `.get()` and `.post()` methods that auto-refresh tokens
    - Handles domain UUID resolution from domain name
    - Self-signed SSL cert support
 
-2. **FMCConnectionPool** (lines 143-173)
-   - Singleton pattern via global `connection_pool` instance
-   - Caches connections by (host, user, domain, verify_ssl) tuple
-   - Enables multi-FMC support in a single server instance
-   - Note: Currently defined but not used (future optimization)
-
-3. **FMCSpecManager** (lines 177-189)
+2. **FMCSpecManager** - `class FMCSpecManager`
    - Fetches OpenAPI spec from FMC at runtime
    - Always uses live spec from `/api-explorer/openapi.json`
    - Ensures spec matches the actual FMC version being accessed
 
-4. **FMCProxy** (lines 247-340)
+3. **FMCProxy** - `class FMCProxy`
    - Bridge to `mcp-openapi-proxy` subprocess
    - Spawns `uvx mcp-openapi-proxy` with FMC connection details
    - Health-check polling (15s timeout with 0.5s retries)
    - Fetches 665+ auto-generated tools from proxy
    - Proxies tool calls via HTTP to subprocess
 
-5. **ToolRegistry** (lines 342-368)
+4. **ToolRegistry** - `class ToolRegistry`
    - Unified tool management (custom + dynamic)
    - Decorator pattern for custom tools (`@registry.tool()`)
    - Dynamic tool registration from proxy
    - Unified `call_tool()` dispatch
 
-6. **Credential Extraction** (lines 409-415)
-   - `extract_fmc_credentials()` implements 3-tier fallback:
+5. **Credential Extraction** - `extract_fmc_credentials()`
+   - Implements 3-tier credential fallback:
      1. Tool arguments (highest priority)
      2. Environment variables
      3. Cisco defaults (192.168.45.45/admin/Admin123)
 
-7. **MCP Server Hooks** (lines 421-461)
-   - Standard MCP stdio server using `@app.list_tools()` and `@app.call_tool()`
+6. **MCP Server Hooks** - `@app.list_tools()` and `@app.call_tool()`
+   - Standard MCP stdio server hooks
    - Client-agnostic (works with Claude Desktop, Claude Code, etc.)
+   - Registered via `async def main()` function
 
 ### Authentication Flow
 ```
@@ -505,10 +500,10 @@ fmcmcp/
 
 ## Future Enhancements
 
-- Connection pooling (use existing FMCConnectionPool)
+- Multi-FMC support (requires multiple proxy instances or credential-based routing)
+- Connection pooling for custom tools
 - Health check endpoint for proxy
 - Unit tests with mocked FMC API
-- Multi-FMC support (parallel connections)
 - Caching of common API responses
 - Observability (metrics, structured logging)
 - Support for FMC API v2+ features

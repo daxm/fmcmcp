@@ -136,42 +136,6 @@ class FMCConnection:
 
 
 # ============================================
-# CONNECTION POOL
-# ============================================
-class FMCConnectionPool:
-    def __init__(self):
-        self._connections: Dict[str, FMCConnection] = {}
-
-    @staticmethod
-    def _get_key(host: str, username: str, domain: str, verify_ssl: bool) -> str:
-        return f"{host}|{username}|{domain}|{verify_ssl}"
-
-    async def get_connection(
-        self,
-        host: str,
-        username: str,
-        password: str,
-        domain: str = "Global",
-        verify_ssl: bool = False,
-    ) -> FMCConnection:
-        key = self._get_key(host, username, domain, verify_ssl)
-        if key not in self._connections:
-            self._connections[key] = FMCConnection(
-                host, username, password, domain, verify_ssl
-            )
-        return self._connections[key]
-
-    async def cleanup(self):
-        for conn in self._connections.values():
-            if conn.session:
-                await conn.session.close()
-        self._connections.clear()
-
-
-connection_pool = FMCConnectionPool()
-
-
-# ============================================
 # SPEC MANAGER
 # ============================================
 class FMCSpecManager:
@@ -421,24 +385,30 @@ async def main():
     domain = os.getenv("FMC_DOMAIN", "Global")
     verify_ssl = os.getenv("FMC_VERIFY_SSL", "False").lower() == "true"
 
-    async with FMCConnection(host, username, password, domain, verify_ssl) as fmc:
-        spec_manager = FMCSpecManager()
-        spec = await spec_manager.get_spec(fmc)
-        temp_spec_path = Path("temp_spec.json")
-        with open(temp_spec_path, "w") as f:
-            json.dump(spec, f)
+    temp_spec_path = Path("temp_spec.json")
 
-        proxy = FMCProxy(temp_spec_path, fmc.base_url, fmc.auth_token)
-        registry.proxy = proxy
-        proxy_tools = await proxy.start()
-        registry.add_proxy_tools(proxy_tools)
+    try:
+        async with FMCConnection(host, username, password, domain, verify_ssl) as fmc:
+            spec_manager = FMCSpecManager()
+            spec = await spec_manager.get_spec(fmc)
+            with open(temp_spec_path, "w") as f:
+                json.dump(spec, f)
 
-        async with stdio_server() as (read_stream, write_stream):
-            await app.run(
-                read_stream, write_stream, app.create_initialization_options()
-            )
+            proxy = FMCProxy(temp_spec_path, fmc.base_url, fmc.auth_token)
+            registry.proxy = proxy
+            proxy_tools = await proxy.start()
+            registry.add_proxy_tools(proxy_tools)
 
-        await proxy.stop()
+            async with stdio_server() as (read_stream, write_stream):
+                await app.run(
+                    read_stream, write_stream, app.create_initialization_options()
+                )
+
+            await proxy.stop()
+    finally:
+        # Cleanup temporary spec file
+        if temp_spec_path.exists():
+            temp_spec_path.unlink()
 
 
 if __name__ == "__main__":
