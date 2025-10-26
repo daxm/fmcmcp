@@ -466,10 +466,10 @@ python -c "import httpx; print(httpx.get('http://localhost:8000/health'))"
 ```
 fmcmcp/
 ├── app/
-│   ├── fmc_mcp_server.py    # Main server (~430 lines)
+│   ├── fmc_mcp_server.py    # Main server (~415 lines)
 │   └── requirements.txt     # Python dependencies
 ├── Dockerfile               # Container definition
-├── .env_example             # Credential template
+├── .dockerignore            # Docker build exclusions
 ├── .gitignore               # Git exclusions
 ├── LICENSE                  # MIT License
 ├── CLAUDE.md                # This file
