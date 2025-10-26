@@ -1,3 +1,13 @@
 *.tmp
 .DS_Store
-.env
+.env*
+.venv/
+.idea/
+.claude/
+.git/
+*.pyc
+__pycache__/
+README.md
+CLAUDE.md
+LICENSE
+temp_spec.json
