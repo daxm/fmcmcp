@@ -387,6 +387,15 @@ Key resources:
 - Verify FMC is reachable from Docker container
 - Confirm user has API permissions in FMC
 
+### User logged out of FMC GUI unexpectedly
+**Important FMC limitation:** FMC does not allow the same user to be logged into both the REST API and the web GUI simultaneously. When the same username is used for both sessions, FMC will auto-logout one session when the other authenticates.
+
+**Impact:**
+- If you're logged into the FMC web GUI as "admin" and the MCP server authenticates as "admin", your GUI session will be logged out
+- Conversely, if you log into the GUI while the MCP server is running, the API session may be terminated
+
+**Best practice:** Create a dedicated API user account (e.g., "mcp-api-user") for the MCP server to avoid disrupting GUI sessions during testing or regular use.
+
 ### "Domain 'X' not found"
 - Domain name is case-sensitive
 - Check available domains in FMC UI (System > Configuration > REST API Preferences)

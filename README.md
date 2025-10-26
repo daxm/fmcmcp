@@ -169,6 +169,11 @@ The server acts as a proxy, translating Claude's natural language requests into 
 - Verify user has API permissions in FMC
 - Confirm FMC is reachable from Docker container
 
+### User logged out of FMC GUI unexpectedly
+**Important:** FMC does not allow the same user to be logged into both the API and the web GUI simultaneously. If you're logged into the FMC web interface and then use this MCP server with the same username, one session will auto-logout the other.
+
+**Recommendation:** Use a dedicated API user account for the MCP server to avoid disrupting GUI sessions.
+
 ### "No tools loaded" or "Proxy failed to start"
 - Check Docker logs: `docker run --rm -i --env-file .env fmcmcp 2>&1 | tee debug.log`
 - Verify `uvx` is installed in container
